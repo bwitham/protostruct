@@ -42,3 +42,9 @@ vscode_extension/out
 
 # Temp/backup files
 *~
+
+# bdw changes
+MODULE.bazel
+MODULE.bazel.lock
+argue/build/
+tangent/protostruct/build/

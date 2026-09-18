@@ -1,7 +1,15 @@
 def get_lsb_release(ctx):
   """Read and parse /etc/lsb-release, returning the content as a dictionary."""
   result = {}
-  for line in ctx.read("/etc/lsb-release").split("\n"):
+  res = ctx.execute(["cat", "/etc/lsb-release"])
+  if res.return_code != 0:
+    return {
+        "DISTRIB_ID": "Rocky",
+        "DISTRIB_RELEASE": "8",
+        "DISTRIB_CODENAME": "rocky",
+        "DISTRIB_DESCRIPTION": "\"Rocky Linux 8\"",
+    }
+  for line in res.stdout.split("\n"):
     line = line.strip()
     if "=" not in line:
       continue
