@@ -174,6 +174,7 @@ protostruct_compile(
   source_patterns = [r"tangent/.*\.h"],
   sourcefile = "test/test_messages.c",
   deps = ["test/test_messages.h"],
+  cflags = ["-isystem", "/usr/lib/clang/21/include"],
 )
 
 protostruct_gen(
