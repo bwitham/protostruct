@@ -10,6 +10,7 @@ import argparse
 import io
 import logging
 import os
+import re
 import zipfile
 
 import jinja2
@@ -115,7 +116,9 @@ def main():
   else:
     thisdir = os.path.dirname(__file__)
     tpldir = os.path.join(thisdir, "templates")
-    jenv = jinja2.Environment(loader=jinja2.FileSystemLoader(tpldir))
+    jenv = jinja2.Environment(
+        trim_blocks=True, lstrip_blocks=True,
+        loader=jinja2.FileSystemLoader(tpldir))
 
   for filedescr in fileset.file:
     jenv.globals.update(
@@ -168,6 +171,10 @@ def main():
       content = template.render(
           filedescr=filedescr,
           include_base=include_base)
+      if template_name.endswith(".proto.jinja2"):
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        content = re.sub(r'(\{\s*)\n\s*\n+', r'\1\n', content)
+        content = re.sub(r'\n\s*\n+(\s*\})', r'\n\1', content)
       if outpath == "-":
         outpath = os.dup(1)
       outdir = os.path.dirname(outpath)

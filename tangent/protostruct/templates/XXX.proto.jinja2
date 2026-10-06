@@ -6,7 +6,6 @@ import "tangent/protostruct/descriptor_extensions.proto";
 {% if filedescr.package %}
 package {{filedescr.package}};
 {% endif %}
-
 {% set opts = util.get_protostruct_options(filedescr) %}
 {% if opts and opts.header_filepath %}
 option (protostruct.fileopts).header_filepath = "{{opts.header_filepath}}";
@@ -16,31 +15,53 @@ option (protostruct.fileopts).header_filepath = "{{opts.header_filepath}}";
 option (protostruct.fileopts).capacity_macros = "{{macrodef.replace("\n","\\n")}}";
 {% endfor %}
 {% endif %}
-
 {% for depend in filedescr.dependency %}
 import "{{depend}}";
 {% endfor %}
-
 {% for enumdescr in filedescr.enum_type %}
+{% if ctx.get_comment(enumdescr) %}
 {{ctx.get_comment(enumdescr)}}
+{% endif %}
 enum {{enumdescr.name}} {
   {% set columns = util.get_enum_columns(enumdescr.value) %}
   {% for valuedescr in enumdescr.value %}
-  {{columns.format(valuedescr.name, valuedescr.number)}};  {{ctx.get_comment(valuedescr)}}
+  {{columns.format(valuedescr.name, valuedescr.number)}};{{ctx.get_comment(valuedescr) and ("  " + ctx.get_comment(valuedescr)) or ""}}
   {% endfor %}
 }
 
 {% endfor %}
 {% for descr in filedescr.message_type %}
+{% if ctx.get_comment(descr) %}
 {{ctx.get_comment(descr)}}
+{% endif %}
 message {{descr.name}} {
   {% if descr.reserved_range %}
   reserved {{util.format_reserved(descr.reserved_range)}};
   {% endif %}
-  {% set columns = ctx.get_field_columns(descr.field) %}
-  {% for fielddescr in descr.field %}
+  {% for nested in descr.nested_type %}
+  message {{nested.name}} {
+    {% set nested_columns = ctx.get_field_columns(nested.field) %}
+    {% for nfield in nested.field %}
+    {{nested_columns.format(*ctx.tuplize_fielddescr(nfield))}}
+    {% endfor %}
+  }
+  {% endfor %}
+  {% for oneof_idx, oneof_decl in enumerate(descr.oneof_decl) %}
+  oneof {{oneof_decl.name}} {
+    {% set oneof_fields = util.get_oneof_fields(descr.field, oneof_idx) %}
+    {% set oneof_columns = ctx.get_field_columns(oneof_fields) %}
+    {% for fielddescr in oneof_fields %}
+    {{oneof_columns.format(*ctx.tuplize_fielddescr(fielddescr))}}
+    {% endfor %}
+  }
+  {% endfor %}
+  {% set non_oneof_fields = util.get_non_oneof_fields(descr.field) %}
+  {% if non_oneof_fields %}
+  {% set columns = ctx.get_field_columns(non_oneof_fields) %}
+  {% for fielddescr in non_oneof_fields %}
   {{columns.format(*ctx.tuplize_fielddescr(fielddescr))}}
   {% endfor %}
+  {% endif %}
 }
 
 {% endfor %}

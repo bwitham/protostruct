@@ -160,35 +160,51 @@ std::string get_cursor_comment(CXCursor c) {
 
 std::string strip_comment_prefix(const std::string& comment) {
   std::stringstream strm{};
-  if (stringutil::startswith(comment, "/*")) {
+  std::string trimmed = stringutil::strip(comment);
+  if (stringutil::startswith(trimmed, "/*")) {
     for (auto& line : stringutil::split(comment, '\n')) {
-      if (stringutil::startswith(line, "/*")) {
-        strm << line.substr(2);
-      } else if (stringutil::startswith(line, "*")) {
-        strm << line.substr(1);
-      } else if (stringutil::startswith(line, " *")) {
-        strm << line.substr(2);
-      } else {
-        strm << line;
+      std::string tline = stringutil::strip(line);
+      if (stringutil::startswith(tline, "/*")) {
+        tline = tline.substr(2);
+      }
+      if (stringutil::endswith(tline, "*/")) {
+        tline = tline.substr(0, tline.size() - 2);
+      }
+      if (stringutil::startswith(tline, "*")) {
+        tline = tline.substr(1);
+      }
+      std::string cleaned = stringutil::strip(tline);
+      if (!cleaned.empty()) {
+        if (strm.tellp() > 0) {
+          strm << " ";
+        }
+        strm << cleaned;
       }
     }
-    std::string out = strm.str();
-    return out.substr(0, out.size() - 2);
+    return stringutil::strip(strm.str());
   } else {
     for (auto& line : stringutil::split(comment, '\n')) {
-      if (stringutil::startswith(line, "//!<")) {
-        strm << line.substr(4);
-      } else if (stringutil::startswith(line, "///<")) {
-        strm << line.substr(4);
-      } else if (stringutil::startswith(line, "///")) {
-        strm << line.substr(3);
-      } else if (stringutil::startswith(line, "//<")) {
-        strm << line.substr(3);
-      } else if (stringutil::startswith(line, "//")) {
-        strm << line.substr(2);
+      std::string tline = stringutil::strip(line);
+      if (stringutil::startswith(tline, "//!<")) {
+        tline = tline.substr(4);
+      } else if (stringutil::startswith(tline, "///<")) {
+        tline = tline.substr(4);
+      } else if (stringutil::startswith(tline, "///")) {
+        tline = tline.substr(3);
+      } else if (stringutil::startswith(tline, "//<")) {
+        tline = tline.substr(3);
+      } else if (stringutil::startswith(tline, "//")) {
+        tline = tline.substr(2);
+      }
+      std::string cleaned = stringutil::strip(tline);
+      if (!cleaned.empty()) {
+        if (strm.tellp() > 0) {
+          strm << " ";
+        }
+        strm << cleaned;
       }
     }
-    return strm.str();
+    return stringutil::strip(strm.str());
   }
 }
 
@@ -251,6 +267,10 @@ void setup_compile_options(argue::Parser* compile_parser,
       " are included in the generated descriptors. Each entry is a regex"
       " pattern. A struct or enum is included if matches an inclusion pattern"
       " and is not excluded by a later exclusion pattern.");
+
+  compile_parser->add_argument(
+      "--multidim-array-mode", dest=&(opts->compile_opts.multidim_array_mode),
+      help="Mode for multi-dimensional arrays: 'flatten' (default) or 'nested'");
 
   compile_parser->add_argument(
     "remainder", nargs=argue::REMAINDER,
@@ -351,7 +371,7 @@ class EnumVisitor : public ClangVisitor {
   explicit EnumVisitor(google::protobuf::EnumDescriptorProto* proto,
                        int enumidx,
                        google::protobuf::FileDescriptorProto* file_proto)
-      : proto_{proto}, enumidx_{enumidx}, file_proto_{file_proto} {
+      : proto_{proto}, enumidx_{enumidx}, file_proto_{file_proto}, has_zero_{false} {
     proto_->clear_value();
   }
   virtual ~EnumVisitor() {}
@@ -370,6 +390,9 @@ class EnumVisitor : public ClangVisitor {
 
     const int number = clang_getEnumConstantDeclValue(c);
     value->set_number(number);
+    if (number == 0) {
+      has_zero_ = true;
+    }
 
     CXString comment_cxstr = clang_Cursor_getRawCommentText(c);
     const char* comment_cstr = clang_getCString(comment_cxstr);
@@ -399,10 +422,34 @@ class EnumVisitor : public ClangVisitor {
     return CXChildVisit_Continue;
   }
 
+  void finish_visit() override {
+    if (!has_zero_ && proto_->value_size() > 0) {
+      std::string zero_name = stringutil::to_upper(proto_->name()) + "_UNSPECIFIED";
+      bool exists = false;
+      for (int i = 0; i < proto_->value_size(); ++i) {
+        if (proto_->value(i).name() == zero_name) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) {
+        proto_->add_value();
+        for (int i = proto_->value_size() - 1; i > 0; --i) {
+          *proto_->mutable_value(i) = proto_->value(i - 1);
+        }
+        auto* first_val = proto_->mutable_value(0);
+        first_val->Clear();
+        first_val->set_name(zero_name);
+        first_val->set_number(0);
+      }
+    }
+  }
+
  private:
   google::protobuf::EnumDescriptorProto* proto_;
   int enumidx_;
   google::protobuf::FileDescriptorProto* file_proto_;
+  bool has_zero_;
 };
 
 /// If `needle` is an enumeration already existing in `proto`, then return
@@ -460,6 +507,8 @@ void get_compatible(
       out->push_back(google::protobuf::FieldDescriptorProto_Type_TYPE_DOUBLE);
       return;
 
+    case CXType_Char_S:
+    case CXType_Char_U:
     case CXType_SChar:
       TANGENT_FALLTHROUGH
     case CXType_Short:
@@ -548,6 +597,8 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
       proto->mutable_options()->MutableExtension(protostruct::fieldopts);
 
   switch (field_type.kind) {
+    case CXType_Char_S:
+    case CXType_Char_U:
     case CXType_SChar:
     case CXType_Short:
     case CXType_UChar:
@@ -573,6 +624,10 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
     }
 
     case CXType_Typedef: {
+      CXType canon = clang_getCanonicalType(field_type);
+      if (canon.kind != CXType_Invalid && canon.kind != CXType_Unexposed && canon.kind != CXType_Typedef) {
+        return set_field_type(proto, canon);
+      }
       CXCursor decl = clang_getTypeDeclaration(field_type);
       CXType underlying_type = clang_getTypedefDeclUnderlyingType(decl);
       // LOG(INFO) << "typedef " << clang_getTypeSpelling(field_type) << " -> "
@@ -589,9 +644,13 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
     case CXType_Record: {
       CXCursor decl = clang_getTypeDeclaration(field_type);
       proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_MESSAGE);
-      CXString typename_cxstr = clang_getCursorSpelling(decl);
-      proto->set_type_name(clang_getCString(typename_cxstr));
-      clang_disposeString(typename_cxstr);
+      std::string typename_str = drop_cxstring(clang_getCursorSpelling(decl));
+      if (typename_str.empty()) {
+        typename_str = drop_cxstring(clang_getTypeSpelling(field_type));
+        typename_str = stringutil::pop_prefix(typename_str, "struct ");
+        typename_str = stringutil::pop_prefix(typename_str, "union ");
+      }
+      proto->set_type_name(typename_str);
       return 0;
     }
     case CXType_Enum: {
@@ -616,6 +675,43 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
       return set_field_type(proto, elem_type);
     }
     case CXType_Pointer: {
+      CXType pointee = clang_getPointeeType(field_type);
+      if (pointee.kind == CXType_Void) {
+        proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_BYTES);
+        my_options->set_fieldtype("void*");
+        return 0;
+      }
+      CXType unwrapped = pointee;
+      while (unwrapped.kind == CXType_Typedef || unwrapped.kind == CXType_Elaborated) {
+        if (unwrapped.kind == CXType_Typedef) {
+          CXCursor decl = clang_getTypeDeclaration(unwrapped);
+          unwrapped = clang_getTypedefDeclUnderlyingType(decl);
+        } else {
+          unwrapped = clang_Type_getNamedType(unwrapped);
+        }
+      }
+      if (unwrapped.kind == CXType_Record) {
+        proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_MESSAGE);
+        CXCursor decl = clang_getTypeDeclaration(unwrapped);
+        std::string typename_str = drop_cxstring(clang_getCursorSpelling(decl));
+        if (typename_str.empty()) {
+          typename_str = drop_cxstring(clang_getTypeSpelling(unwrapped));
+          typename_str = stringutil::pop_prefix(typename_str, "struct ");
+          typename_str = stringutil::pop_prefix(typename_str, "union ");
+        }
+        proto->set_type_name(typename_str);
+        my_options->set_fieldtype(drop_cxstring(clang_getTypeSpelling(field_type)));
+        return 0;
+      }
+      if (unwrapped.kind == CXType_Int || unwrapped.kind == CXType_Short ||
+          unwrapped.kind == CXType_Long || unwrapped.kind == CXType_LongLong ||
+          unwrapped.kind == CXType_Float || unwrapped.kind == CXType_Double ||
+          unwrapped.kind == CXType_UInt || unwrapped.kind == CXType_ULong ||
+          unwrapped.kind == CXType_ULongLong || unwrapped.kind == CXType_UChar ||
+          unwrapped.kind == CXType_SChar) {
+        my_options->set_fieldtype(drop_cxstring(clang_getTypeSpelling(field_type)));
+        return set_field_type(proto, unwrapped);
+      }
       return 1;
     }
     case CXType_Bool: {
@@ -680,8 +776,9 @@ class VisitorContext {
  public:
   VisitorContext(CXTranslationUnit tunit,
                  const std::vector<std::string>& source_patterns,
-                 const std::string fileset_in)
-      : tunit_{tunit} {
+                 const std::string fileset_in,
+                 const std::string& multidim_array_mode = "flatten")
+      : tunit_{tunit}, multidim_array_mode_{multidim_array_mode} {
     (void)tunit_;
 
     google::protobuf::FileDescriptorSet file_set{};
@@ -744,6 +841,14 @@ class VisitorContext {
       source_filepath_ = filename;
       file_proto_.reset();
     }
+  }
+
+  CXTranslationUnit tunit() const {
+    return tunit_;
+  }
+
+  const std::string& multidim_array_mode() const {
+    return multidim_array_mode_;
   }
 
   std::string get_source(CXCursor cursor) {
@@ -849,6 +954,9 @@ class VisitorContext {
   /// The translation unit built by compiling the header
   CXTranslationUnit tunit_;
 
+  /// Mode for multi-dimensional arrays ("flatten" or "nested")
+  std::string multidim_array_mode_;
+
   /// The path to the header file we are currently visiting
   std::string source_filepath_;
 
@@ -922,8 +1030,12 @@ bool fieldname_is_lengthfield(const std::string& fieldname,
 class MessageVisitor : public ClangVisitor {
  public:
   explicit MessageVisitor(google::protobuf::DescriptorProto* proto, int msgidx,
-                          VisitorContext* ctx)
-      : proto_{proto}, msgidx_{msgidx}, ctx_{ctx}, next_number_{1} {
+                          VisitorContext* ctx, bool is_union = false)
+      : proto_{proto}, msgidx_{msgidx}, ctx_{ctx}, next_number_{1}, is_union_{is_union} {
+    if (is_union_ && proto_->oneof_decl_size() == 0) {
+      auto* oneof = proto_->add_oneof_decl();
+      oneof->set_name("data");
+    }
     for (int idx = 0; idx < proto_->reserved_range_size(); idx++) {
       auto range = proto_->reserved_range(idx);
       if (range.has_end()) {
@@ -949,6 +1061,80 @@ class MessageVisitor : public ClangVisitor {
 
     std::string fieldname = drop_cxstring(clang_getCursorSpelling(c));
     CXType fieldtype = clang_getCursorType(c);
+
+    // Multi-dimensional array handling
+    std::vector<int64_t> array_dims;
+    CXType cur_type = fieldtype;
+    while (cur_type.kind == CXType_ConstantArray) {
+      array_dims.push_back(clang_getArraySize(cur_type));
+      cur_type = clang_getArrayElementType(cur_type);
+    }
+
+    if (array_dims.size() > 1) {
+      if (ctx_->multidim_array_mode() == "nested") {
+        google::protobuf::DescriptorProto* row_msg = nullptr;
+        for (int i = 0; i < proto_->nested_type_size(); ++i) {
+          if (proto_->nested_type(i).name() == "Row") {
+            row_msg = proto_->mutable_nested_type(i);
+            break;
+          }
+        }
+        if (!row_msg) {
+          row_msg = proto_->add_nested_type();
+          row_msg->set_name("Row");
+          auto* col_field = row_msg->add_field();
+          col_field->set_name("columns");
+          col_field->set_number(1);
+          col_field->set_label(google::protobuf::FieldDescriptorProto_Label_LABEL_REPEATED);
+          set_field_type(col_field, cur_type);
+          col_field->mutable_options()
+              ->MutableExtension(protostruct::fieldopts)
+              ->set_capacity(array_dims.back());
+        }
+
+        auto field = std::make_shared<google::protobuf::FieldDescriptorProto>();
+        field->set_name(fieldname);
+        field->set_number(get_next_number());
+        field->set_label(google::protobuf::FieldDescriptorProto_Label_LABEL_REPEATED);
+        field->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_MESSAGE);
+        field->set_type_name("Row");
+        field->mutable_options()
+            ->MutableExtension(protostruct::fieldopts)
+            ->set_capacity(array_dims[0]);
+        if (is_union_) {
+          field->set_oneof_index(0);
+        }
+        output_fields_.emplace_back(std::move(field));
+        return CXChildVisit_Continue;
+      } else {
+        int64_t total_size = 1;
+        for (int64_t dim : array_dims) {
+          total_size *= dim;
+        }
+        auto field = std::make_shared<google::protobuf::FieldDescriptorProto>();
+        field->set_name(fieldname);
+        field->set_number(get_next_number());
+        field->set_label(google::protobuf::FieldDescriptorProto_Label_LABEL_REPEATED);
+        int err = set_field_type(field.get(), cur_type);
+        if (err) {
+          LOG(WARNING) << "Dropping field " << fieldname << " at " << clang_getCursorLocation(c);
+          return CXChildVisit_Continue;
+        }
+        field->mutable_options()
+            ->MutableExtension(protostruct::fieldopts)
+            ->set_capacity(total_size);
+        for (int64_t dim : array_dims) {
+          field->mutable_options()
+              ->MutableExtension(protostruct::fieldopts)
+              ->add_dimensions(dim);
+        }
+        if (is_union_) {
+          field->set_oneof_index(0);
+        }
+        output_fields_.emplace_back(std::move(field));
+        return CXChildVisit_Continue;
+      }
+    }
 
     bool needs_number = false;
     auto* found_field = find_field(proto_, fieldname);
@@ -1018,6 +1204,10 @@ class MessageVisitor : public ClangVisitor {
 
     if (needs_number) {
       field->set_number(get_next_number());
+    }
+
+    if (is_union_) {
+      field->set_oneof_index(0);
     }
 
     if (!comment.empty()) {
@@ -1141,6 +1331,7 @@ class MessageVisitor : public ClangVisitor {
   std::set<int> existing_numbers_;
   std::vector<std::shared_ptr<google::protobuf::FieldDescriptorProto>>
       output_fields_;
+  bool is_union_{false};
 };
 
 /// If a message named `needle` already exists in the FileDesciptorProto
@@ -1224,29 +1415,71 @@ class FileVisitor : public ClangVisitor {
             ->mutable_options()
             ->MutableExtension(protostruct::fileopts)
             ->add_included_files(included_filename);
+
+        std::string header_spelling = drop_cxstring(clang_getCursorSpelling(c));
+        header_spelling = stringutil::strip(header_spelling, " \t\r\n\"'<>");
+
+        static const std::set<std::string> system_headers = {
+            "time.h", "stdint.h", "stdbool.h", "stddef.h", "stdalign.h",
+            "stdio.h", "stdlib.h", "string.h", "math.h", "assert.h",
+            "limits.h", "float.h", "ctype.h", "errno.h", "fcntl.h",
+            "unistd.h", "sys/types.h", "sys/stat.h", "sys/mman.h"
+        };
+
+        bool is_system = false;
+        if (clang_Location_isInSystemHeader(clang_getCursorLocation(c))) {
+          is_system = true;
+        }
+        if (system_headers.count(header_spelling) || system_headers.count(included_filename)) {
+          is_system = true;
+        }
+        if (stringutil::startswith(included_filename, "/usr/include") ||
+            stringutil::startswith(included_filename, "/usr/lib")) {
+          is_system = true;
+        }
+
+        if (!is_system && !header_spelling.empty()) {
+          std::string proto_dep = header_spelling;
+          auto dot_pos = proto_dep.rfind('.');
+          if (dot_pos != std::string::npos) {
+            proto_dep = proto_dep.substr(0, dot_pos) + ".proto";
+          } else {
+            proto_dep += ".proto";
+          }
+
+          bool already_added = false;
+          for (int i = 0; i < ctx_->file_proto()->dependency_size(); ++i) {
+            if (ctx_->file_proto()->dependency(i) == proto_dep) {
+              already_added = true;
+              break;
+            }
+          }
+          if (!already_added) {
+            ctx_->file_proto()->add_dependency(proto_dep);
+          }
+        }
         break;
       }
 
       case CXCursor_EnumDecl: {
-        auto pair = visited_enums_.insert(cursor_spelling);
+        std::string needle = drop_cxstring(clang_getCursorSpelling(c));
+        if (needle.empty() || needle.find("anonymous") != std::string::npos ||
+            needle.find("(unnamed") != std::string::npos) {
+          // Anonymous enum: processed when typedef is visited
+          return CXChildVisit_Recurse;
+        }
+
+        auto pair = visited_enums_.insert(needle);
         if (!pair.second) {
-          // This is the second time we've hit this decl node. This happens
-          // because typedefed structs get enumerated twice.
           return CXChildVisit_Continue;
         }
 
         std::string comment = get_cursor_comment(c);
         if (comment.find("protostruct: skip") != std::string::npos) {
-          LOG(INFO) << "Skipping enum " << clang_getCursorSpelling(c);
+          LOG(INFO) << "Skipping enum " << needle;
           return CXChildVisit_Continue;
         }
 
-        std::string needle{};
-        /* temp scope */ {
-          CXString namestr = clang_getCursorSpelling(c);
-          needle = clang_getCString(namestr);
-          clang_disposeString(namestr);
-        }
         int enumidx = 0;
         auto* enum_proto = find_enum(ctx_->file_proto(), needle, &enumidx);
         visit_tree<EnumVisitor>(c, enum_proto, enumidx, ctx_->file_proto());
@@ -1256,7 +1489,6 @@ class FileVisitor : public ClangVisitor {
               ->MutableExtension(protostruct::enumopts)
               ->set_comment(comment);
 
-          //  enum_type is field #5 within FileDescriptorProto
           auto* location = find_location(ctx_->file_proto(), {5, enumidx});
           std::string stripped_comment = strip_comment_prefix(comment);
           location->set_leading_comments(stripped_comment);
@@ -1266,36 +1498,33 @@ class FileVisitor : public ClangVisitor {
       }
 
       case CXCursor_StructDecl: {
-        auto pair = visited_enums_.insert(cursor_spelling);
+        std::string needle = drop_cxstring(clang_getCursorSpelling(c));
+        if (needle.empty() || needle.find("anonymous") != std::string::npos ||
+            needle.find("(unnamed") != std::string::npos) {
+          // Anonymous struct: processed when typedef is visited
+          return CXChildVisit_Recurse;
+        }
+
+        auto pair = visited_messages_.insert(needle);
         if (!pair.second) {
-          // This is the second time we've hit this decl node. This happens
-          // because typedefed structs get enumerated twice.
           return CXChildVisit_Continue;
         }
 
         std::string comment = get_cursor_comment(c);
         if (comment.find("protostruct: skip") != std::string::npos) {
-          LOG(INFO) << "Skipping struct " << clang_getCursorSpelling(c);
+          LOG(INFO) << "Skipping struct " << needle;
           return CXChildVisit_Continue;
-        }
-
-        std::string needle{};
-        /* temp scope */ {
-          CXString namestr = clang_getCursorSpelling(c);
-          needle = clang_getCString(namestr);
-          clang_disposeString(namestr);
         }
 
         int msgidx = 0;
         auto* msg_proto = find_message(ctx_->file_proto(), needle, &msgidx);
-        visit_tree<MessageVisitor>(c, msg_proto, msgidx, ctx_);
+        visit_tree<MessageVisitor>(c, msg_proto, msgidx, ctx_, /*is_union=*/false);
 
         if (comment.size() > 0) {
           msg_proto->mutable_options()
               ->MutableExtension(protostruct::msgopts)
               ->set_comment(comment);
 
-          //  message_Type is field #4 within FileDescriptorProto
           auto* location = find_location(ctx_->file_proto(), {4, msgidx});
           std::string stripped_comment = strip_comment_prefix(comment);
           location->set_leading_comments(stripped_comment);
@@ -1303,15 +1532,204 @@ class FileVisitor : public ClangVisitor {
         return CXChildVisit_Continue;
       }
 
-      case CXCursor_MacroDefinition: {
-        // NOTE(josh): clang_getCursorSpelling yields only the name of the
-        // macro, not it's definition/expansions
+      case CXCursor_UnionDecl: {
+        std::string needle = drop_cxstring(clang_getCursorSpelling(c));
+        if (needle.empty() || needle.find("anonymous") != std::string::npos ||
+            needle.find("(unnamed") != std::string::npos) {
+          // Anonymous union: processed when typedef is visited
+          return CXChildVisit_Recurse;
+        }
 
-        std::stringstream strm{};
-        strm << clang_getCursorSpelling(c);
-        std::string name = strm.str();
+        auto pair = visited_messages_.insert(needle);
+        if (!pair.second) {
+          return CXChildVisit_Continue;
+        }
+
+        std::string comment = get_cursor_comment(c);
+        if (comment.find("protostruct: skip") != std::string::npos) {
+          LOG(INFO) << "Skipping union " << needle;
+          return CXChildVisit_Continue;
+        }
+
+        int msgidx = 0;
+        auto* msg_proto = find_message(ctx_->file_proto(), needle, &msgidx);
+        visit_tree<MessageVisitor>(c, msg_proto, msgidx, ctx_, /*is_union=*/true);
+
+        if (comment.size() > 0) {
+          msg_proto->mutable_options()
+              ->MutableExtension(protostruct::msgopts)
+              ->set_comment(comment);
+
+          auto* location = find_location(ctx_->file_proto(), {4, msgidx});
+          std::string stripped_comment = strip_comment_prefix(comment);
+          location->set_leading_comments(stripped_comment);
+        }
+        return CXChildVisit_Continue;
+      }
+
+      case CXCursor_TypedefDecl: {
+        std::string typedef_name = drop_cxstring(clang_getCursorSpelling(c));
+        if (typedef_name.empty()) {
+          return CXChildVisit_Continue;
+        }
+
+        CXType underlying = clang_getTypedefDeclUnderlyingType(c);
+        if (underlying.kind == CXType_Elaborated) {
+          underlying = clang_Type_getNamedType(underlying);
+        }
+        CXCursor decl = clang_getTypeDeclaration(underlying);
+        CXCursorKind decl_kind = clang_getCursorKind(decl);
+        std::string decl_name = drop_cxstring(clang_getCursorSpelling(decl));
+        std::string comment = get_cursor_comment(c);
+        if (comment.empty()) {
+          comment = get_cursor_comment(decl);
+        }
+
+        if (decl_kind == CXCursor_StructDecl) {
+          if (visited_messages_.insert(typedef_name).second) {
+            int msgidx = 0;
+            auto* msg_proto = find_message(ctx_->file_proto(), typedef_name, &msgidx);
+            visit_tree<MessageVisitor>(decl, msg_proto, msgidx, ctx_, /*is_union=*/false);
+            if (!comment.empty()) {
+              msg_proto->mutable_options()
+                  ->MutableExtension(protostruct::msgopts)
+                  ->set_comment(comment);
+              auto* location = find_location(ctx_->file_proto(), {4, msgidx});
+              std::string stripped_comment = strip_comment_prefix(comment);
+              location->set_leading_comments(stripped_comment);
+            }
+          }
+        } else if (decl_kind == CXCursor_UnionDecl) {
+          if (visited_messages_.insert(typedef_name).second) {
+            int msgidx = 0;
+            auto* msg_proto = find_message(ctx_->file_proto(), typedef_name, &msgidx);
+            visit_tree<MessageVisitor>(decl, msg_proto, msgidx, ctx_, /*is_union=*/true);
+            if (!comment.empty()) {
+              msg_proto->mutable_options()
+                  ->MutableExtension(protostruct::msgopts)
+                  ->set_comment(comment);
+              auto* location = find_location(ctx_->file_proto(), {4, msgidx});
+              std::string stripped_comment = strip_comment_prefix(comment);
+              location->set_leading_comments(stripped_comment);
+            }
+          }
+        } else if (decl_kind == CXCursor_EnumDecl) {
+          if (visited_enums_.insert(typedef_name).second) {
+            int enumidx = 0;
+            auto* enum_proto = find_enum(ctx_->file_proto(), typedef_name, &enumidx);
+            visit_tree<EnumVisitor>(decl, enum_proto, enumidx, ctx_->file_proto());
+            if (!comment.empty()) {
+              enum_proto->mutable_options()
+                  ->MutableExtension(protostruct::enumopts)
+                  ->set_comment(comment);
+              auto* location = find_location(ctx_->file_proto(), {5, enumidx});
+              std::string stripped_comment = strip_comment_prefix(comment);
+              location->set_leading_comments(stripped_comment);
+            }
+          }
+        }
+        return CXChildVisit_Continue;
+      }
+
+      case CXCursor_VarDecl: {
+        std::string var_name = drop_cxstring(clang_getCursorSpelling(c));
+        if (var_name.empty()) {
+          return CXChildVisit_Continue;
+        }
+
+        std::string src = ctx_->get_source(c);
+        bool is_constexpr = (src.find("constexpr") != std::string::npos);
+        bool is_hex = (src.find("0x") != std::string::npos || src.find("0X") != std::string::npos);
+
+        if (is_constexpr && is_hex) {
+          int enumidx = 0;
+          auto* hex_enum = find_enum(ctx_->file_proto(), "HexConstants", &enumidx);
+          if (hex_enum->value_size() == 0) {
+            auto* zero_val = hex_enum->add_value();
+            zero_val->set_name("HEX_CONSTANTS_UNSPECIFIED");
+            zero_val->set_number(0);
+          }
+          int64_t val = 0;
+          CXEvalResult eval = clang_Cursor_Evaluate(c);
+          if (eval) {
+            if (clang_EvalResult_getKind(eval) == CXEval_Int) {
+              val = clang_EvalResult_getAsLongLong(eval);
+            }
+            clang_EvalResult_dispose(eval);
+          } else {
+            auto hex_pos = src.find("0x");
+            if (hex_pos == std::string::npos) hex_pos = src.find("0X");
+            if (hex_pos != std::string::npos) {
+              val = std::strtoll(src.c_str() + hex_pos, nullptr, 16);
+            }
+          }
+          bool exists = false;
+          for (int i = 0; i < hex_enum->value_size(); ++i) {
+            if (hex_enum->value(i).name() == var_name) {
+              exists = true; break;
+            }
+          }
+          if (!exists) {
+            auto* val_entry = hex_enum->add_value();
+            val_entry->set_name(var_name);
+            val_entry->set_number(val);
+          }
+        } else {
+          int msgidx = 0;
+          auto* global_msg = find_message(ctx_->file_proto(), "GlobalVariables", &msgidx);
+          auto* field = find_field(global_msg, var_name);
+          if (!field) {
+            field = global_msg->add_field();
+            field->set_name(var_name);
+            field->set_number(global_msg->field_size());
+            CXType var_type = clang_getCursorType(c);
+            set_field_type(field, var_type);
+            std::string comment = get_cursor_comment(c);
+            if (!comment.empty()) {
+              field->mutable_options()
+                  ->MutableExtension(protostruct::fieldopts)
+                  ->set_comment(comment);
+            }
+          }
+        }
+        return CXChildVisit_Continue;
+      }
+
+      case CXCursor_MacroDefinition: {
+        std::string name = drop_cxstring(clang_getCursorSpelling(c));
         std::string defn = ctx_->get_source(c);
         ctx_->macros()[name] = defn;
+
+        if (!clang_Cursor_isMacroFunctionLike(c)) {
+          auto name_pos = defn.find(name);
+          if (name_pos != std::string::npos) {
+            std::string expr = stringutil::strip(defn.substr(name_pos + name.length()));
+            if (expr.find('.') == std::string::npos && !expr.empty()) {
+              char* endptr = nullptr;
+              long long val = std::strtoll(expr.c_str(), &endptr, 0);
+              if (endptr != expr.c_str() && *stringutil::strip(endptr).c_str() == '\0') {
+                int enumidx = 0;
+                auto* const_enum = find_enum(ctx_->file_proto(), "Constants", &enumidx);
+                if (const_enum->value_size() == 0) {
+                  auto* zero_val = const_enum->add_value();
+                  zero_val->set_name("CONSTANTS_UNSPECIFIED");
+                  zero_val->set_number(0);
+                }
+                bool exists = false;
+                for (int i = 0; i < const_enum->value_size(); ++i) {
+                  if (const_enum->value(i).name() == name) {
+                    exists = true; break;
+                  }
+                }
+                if (!exists) {
+                  auto* val_entry = const_enum->add_value();
+                  val_entry->set_name(name);
+                  val_entry->set_number(val);
+                }
+              }
+            }
+          }
+        }
         break;
       }
 
@@ -1404,17 +1822,41 @@ int compile_main(const ProgramOptions& popts) {
   CXIndex index = clang_createIndex(0, 0);
   CXTranslationUnit tunit{};
 
+  bool has_std = false;
+  bool has_lang = false;
+  bool has_comments_flag = false;
+  for (const auto& arg : copts.clang_options) {
+    if (arg.find("-std=") != std::string::npos) {
+      has_std = true;
+    }
+    if (arg == "-x" || arg.find("-language") != std::string::npos) {
+      has_lang = true;
+    }
+    if (arg == "-fparse-all-comments") {
+      has_comments_flag = true;
+    }
+  }
+
+  std::vector<std::string> default_flags;
+  if (!has_comments_flag) {
+    default_flags.push_back("-fparse-all-comments");
+  }
+  if (!has_std) {
+    default_flags.push_back("-std=c++17");
+  }
+  if (!has_lang) {
+    default_flags.push_back("-x");
+    default_flags.push_back("c++");
+  }
+
   std::vector<const char*> clang_argv;
-  clang_argv.reserve(copts.clang_options.size() + 10);
+  clang_argv.reserve(copts.clang_options.size() + default_flags.size() + 10);
+  for (const auto& arg : default_flags) {
+    clang_argv.push_back(arg.c_str());
+  }
   for (const auto& arg : copts.clang_options) {
     clang_argv.push_back(&arg[0]);
   }
-
-  // TODO(josh): don't bake these here.
-  // NOTE(josh): previously used -std=c++11 and -language=c++ but would fail
-  // to parse test_messages.h on clang-13
-  clang_argv.push_back("-std=c99");
-  clang_argv.push_back("-language=c");
 
 #if CINDEX_VERSION == CINDEX_VERSION_ENCODE(0, 50)
   // NOTE(josh): clang8 can't seem to find standard headers
@@ -1453,7 +1895,8 @@ int compile_main(const ProgramOptions& popts) {
     source_patterns.emplace_back(copts.source_filepath);
   }
 
-  VisitorContext ctx{tunit, source_patterns, descriptor_set_inpath};
+  VisitorContext ctx{tunit, source_patterns, descriptor_set_inpath,
+                     copts.multidim_array_mode};
   visit_tree<FileVisitor>(clang_getTranslationUnitCursor(tunit), &ctx);
   google::protobuf::FileDescriptorSet fileset{};
 

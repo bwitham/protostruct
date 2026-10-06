@@ -100,6 +100,9 @@ message FieldOptions {
   // If this field is an array in its C struct representation, then this
   // is the name of the #define or enum containing it's capacity.
   optional string capname = 5;
+
+  // If this field is a multi-dimensional array, the dimensions are stored here.
+  repeated int32 dimensions = 6;
 }
 
 extend google.protobuf.FieldOptions {

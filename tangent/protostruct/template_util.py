@@ -269,3 +269,11 @@ def is_repeated(descr):
     return False
 
   return descr.label == descriptor_pb2.FieldDescriptorProto.LABEL_REPEATED
+
+
+def get_oneof_fields(fields, oneof_idx):
+  return [f for f in fields if f.HasField("oneof_index") and f.oneof_index == oneof_idx]
+
+
+def get_non_oneof_fields(fields):
+  return [f for f in fields if not f.HasField("oneof_index")]

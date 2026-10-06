@@ -49,6 +49,9 @@ struct ProgramOptions {
     /// List of flags passed to libclang to build the translation unit (e.g.
     /// compilation flags).
     std::vector<std::string> clang_options;
+
+    /// Mode for multi-dimensional arrays: "flatten" (default) or "nested"
+    std::string multidim_array_mode{"flatten"};
   } compile_opts;
 
   struct GenerateOptions {

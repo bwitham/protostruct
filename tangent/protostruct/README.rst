@@ -56,6 +56,28 @@ a little more complicated if the .h are held in the project as a source of
 truth, but not impossible. In this case, a stripped down .proto can be included
 and provided for synchronization, just to manage the schema evolution.
 
+Supported C Constructs & Conversions
+====================================
+
+`protostruct` supports rich C constructs when compiling headers to `.proto`:
+
+1. **Anonymous Struct and Union Typedefs**: `typedef struct { ... } MyStruct;` and `typedef union { ... } MyUnion;` correctly extract and use the typedef name.
+2. **Unions**: C unions are mapped to Proto3 messages enclosing a `oneof data { ... }` block with mutually exclusive fields.
+3. **Multi-Dimensional Arrays**: Can be represented in two modes via `--multidim-array-mode`:
+   - `flatten` (default): A single 1D `repeated` field of size `dim1 * dim2 * ...`.
+   - `nested`: Preserves dimensions by generating intermediate nested `Row` messages containing repeated columns.
+4. **`void*` Pointers**: Converted to protobuf `bytes` (`repeated bytes` for arrays of void pointers).
+5. **Preprocessor `#if` and Static Variables**: Extracted and aggregated into a shared synthetic `message GlobalVariables { ... }`.
+6. **Preprocessor Defined Integer Values**: `#define NAME <int>` values are converted to a `enum Constants` with a default `CONSTANTS_UNSPECIFIED = 0`. Decimal floating-point defines are omitted.
+7. **`constexpr` Constants**: `constexpr uint32_t val = 0x...;` hex constants are converted into decimal enumerator values within `enum HexConstants` with `HEX_CONSTANTS_UNSPECIFIED = 0`.
+8. **Struct Pointers**: Pointers to other structs (`MyStruct *ptr;`) are mapped to protobuf message field references (`MyStruct ptr = 1;`).
+9. **`sizeof()` in Enums**: Compile-time evaluated `sizeof()` expressions are retained with required Proto3 default 0 values (`<ENUM>_UNSPECIFIED = 0`).
+10. **Typedefs Referencing Integral Types**: Typedef aliases to integral types (e.g. `typedef long myLong;`) are resolved inline to standard protobuf types (`int64`, etc.).
+11. **Member Default Initializers**: Struct member initializers (`float x = 5.6;`) parse cleanly with default values set at runtime.
+12. **Comment Preservation**: Retains C/C++ comments (both `/* ... */` and `// ...`) across enums, messages, and fields.
+13. **Include Directives**: Non-system C `#include` directives (e.g. `"foo.h"`) are translated to protobuf `import "foo.proto";` statements.
+14. **Clean Newline Formatting**: Extraneous blank lines inside messages and enums are eliminated.
+
 --------
 generate
 --------

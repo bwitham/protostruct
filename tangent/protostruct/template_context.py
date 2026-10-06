@@ -108,6 +108,21 @@ def format_leading_comment(commentstr, style):
   raise ValueError("Unknown style {}".format(style))
 
 
+def format_proto_comment(comment):
+  if not comment:
+    return ""
+  c = comment.strip()
+  if c.startswith("/*") and c.endswith("*/"):
+    return "// " + c[2:-2].strip()
+  if c.startswith("//!<") or c.startswith("///<"):
+    return "// " + c[4:].strip()
+  if c.startswith("///") or c.startswith("//<"):
+    return "// " + c[3:].strip()
+  if c.startswith("//"):
+    return c
+  return "// " + c
+
+
 def format_trailing_comment(commentstr, style):
   lines = commentstr.strip().split("\n")
   if style == "cpp":
@@ -270,7 +285,7 @@ class TemplateContext(object):
     if not options.HasField("comment"):
       return ""
 
-    return options.comment
+    return format_proto_comment(options.comment)
 
   def tuplize_fielddescr(self, fielddescr, style=None):
     """Given a FieldDescriptorProto return a tuple containing the parts of
@@ -280,8 +295,11 @@ class TemplateContext(object):
     if style is None:
       style = "proto"
     if style == "proto":
+      label = util.get_label(fielddescr)
+      if fielddescr.HasField("oneof_index"):
+        label = ""
       return (
-          util.get_label(fielddescr),
+          label,
           self.get_typename(fielddescr, style),
           fielddescr.name,
           fielddescr.number,
@@ -329,7 +347,7 @@ class TemplateContext(object):
         format_parts.append("{}")
 
       # <type> <name> = <number>
-      format_parts.append("{:>%ds} {:%ds} = {:%dd}" % tuple(lengths[1:4]))
+      format_parts.append("{:%ds} {:%ds} = {:%dd}" % tuple(lengths[1:4]))
 
       # options, e.g. [packed=true]
       format_parts.append("{}")
