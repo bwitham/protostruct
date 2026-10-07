@@ -626,6 +626,24 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
     case CXType_Typedef: {
       CXType canon = clang_getCanonicalType(field_type);
       if (canon.kind != CXType_Invalid && canon.kind != CXType_Unexposed && canon.kind != CXType_Typedef) {
+        if (canon.kind == CXType_Record || canon.kind == CXType_Enum) {
+          CXCursor decl = clang_getTypeDeclaration(canon);
+          std::string record_name = drop_cxstring(clang_getCursorSpelling(decl));
+          if (record_name.empty() || record_name.find("anonymous") != std::string::npos ||
+              record_name.find("(unnamed") != std::string::npos) {
+            if (canon.kind == CXType_Record) {
+              proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_MESSAGE);
+            } else {
+              proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_ENUM);
+            }
+            std::string typename_str = drop_cxstring(clang_getTypeSpelling(field_type));
+            typename_str = stringutil::pop_prefix(typename_str, "struct ");
+            typename_str = stringutil::pop_prefix(typename_str, "union ");
+            typename_str = stringutil::pop_prefix(typename_str, "enum ");
+            proto->set_type_name(typename_str);
+            return 0;
+          }
+        }
         return set_field_type(proto, canon);
       }
       CXCursor decl = clang_getTypeDeclaration(field_type);
@@ -681,6 +699,13 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
         my_options->set_fieldtype("void*");
         return 0;
       }
+      std::string typedef_spelling;
+      if (pointee.kind == CXType_Typedef) {
+        typedef_spelling = drop_cxstring(clang_getTypeSpelling(pointee));
+        typedef_spelling = stringutil::pop_prefix(typedef_spelling, "struct ");
+        typedef_spelling = stringutil::pop_prefix(typedef_spelling, "union ");
+        typedef_spelling = stringutil::pop_prefix(typedef_spelling, "enum ");
+      }
       CXType unwrapped = pointee;
       while (unwrapped.kind == CXType_Typedef || unwrapped.kind == CXType_Elaborated) {
         if (unwrapped.kind == CXType_Typedef) {
@@ -694,10 +719,15 @@ int set_field_type(google::protobuf::FieldDescriptorProto* proto,
         proto->set_type(google::protobuf::FieldDescriptorProto_Type_TYPE_MESSAGE);
         CXCursor decl = clang_getTypeDeclaration(unwrapped);
         std::string typename_str = drop_cxstring(clang_getCursorSpelling(decl));
-        if (typename_str.empty()) {
-          typename_str = drop_cxstring(clang_getTypeSpelling(unwrapped));
-          typename_str = stringutil::pop_prefix(typename_str, "struct ");
-          typename_str = stringutil::pop_prefix(typename_str, "union ");
+        if (typename_str.empty() || typename_str.find("anonymous") != std::string::npos ||
+            typename_str.find("(unnamed") != std::string::npos) {
+          if (!typedef_spelling.empty()) {
+            typename_str = typedef_spelling;
+          } else {
+            typename_str = drop_cxstring(clang_getTypeSpelling(unwrapped));
+            typename_str = stringutil::pop_prefix(typename_str, "struct ");
+            typename_str = stringutil::pop_prefix(typename_str, "union ");
+          }
         }
         proto->set_type_name(typename_str);
         my_options->set_fieldtype(drop_cxstring(clang_getTypeSpelling(field_type)));
