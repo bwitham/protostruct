@@ -63,7 +63,7 @@ Supported C Constructs & Conversions
 
 1. **Anonymous Struct and Union Typedefs**: `typedef struct { ... } MyStruct;` and `typedef union { ... } MyUnion;` correctly extract and use the typedef name.
 2. **Unions**: C unions are mapped to Proto3 messages enclosing a `oneof data { ... }` block with mutually exclusive fields.
-3. **Multi-Dimensional Arrays**: Can be represented in two modes via `--multidim-array-mode`:
+3. **Multi-Dimensional Arrays**: Can be represented in two modes via `--pb-multidim-array-mode`:
    - `flatten` (default): A single 1D `repeated` field of size `dim1 * dim2 * ...`.
    - `nested`: Preserves dimensions by generating intermediate nested `Row` messages containing repeated columns.
 4. **`void*` Pointers**: Converted to protobuf `bytes` (`repeated bytes` for arrays of void pointers).

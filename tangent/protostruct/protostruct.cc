@@ -269,7 +269,7 @@ void setup_compile_options(argue::Parser* compile_parser,
       " and is not excluded by a later exclusion pattern.");
 
   compile_parser->add_argument(
-      "--multidim-array-mode", dest=&(opts->compile_opts.multidim_array_mode),
+      "--pb-multidim-array-mode", dest=&(opts->compile_opts.multidim_array_mode),
       help="Mode for multi-dimensional arrays: 'flatten' (default) or 'nested'");
 
   compile_parser->add_argument(
