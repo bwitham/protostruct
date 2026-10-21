@@ -1907,7 +1907,7 @@ int compile_main(const ProgramOptions& popts) {
   }
 
   if (clang_getNumDiagnostics(tunit)) {
-    LOG(WARNING) << "CINDEX_VERSION" << CINDEX_VERSION_MAJOR << "."
+    LOG(INFO) << "CINDEX_VERSION" << CINDEX_VERSION_MAJOR << "."
                  << CINDEX_VERSION_MINOR;
   }
   for (size_t idx = 0; idx < clang_getNumDiagnostics(tunit); idx++) {
