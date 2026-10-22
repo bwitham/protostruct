@@ -1449,23 +1449,13 @@ class FileVisitor : public ClangVisitor {
         std::string header_spelling = drop_cxstring(clang_getCursorSpelling(c));
         header_spelling = stringutil::strip(header_spelling, " \t\r\n\"'<>");
 
-        static const std::set<std::string> system_headers = {
-            "time.h", "stdint.h", "stdbool.h", "stddef.h", "stdalign.h",
-            "stdio.h", "stdlib.h", "string.h", "math.h", "assert.h",
-            "limits.h", "float.h", "ctype.h", "errno.h", "fcntl.h",
-            "unistd.h", "sys/types.h", "sys/stat.h", "sys/mman.h"
-        };
-
-        bool is_system = false;
-        if (clang_Location_isInSystemHeader(clang_getCursorLocation(c))) {
-          is_system = true;
-        }
-        if (system_headers.count(header_spelling) || system_headers.count(included_filename)) {
-          is_system = true;
-        }
-        if (stringutil::startswith(included_filename, "/usr/include") ||
-            stringutil::startswith(included_filename, "/usr/lib")) {
-          is_system = true;
+        // A header is a system header if clang found it in a system include directory
+        // (the standard directories, -isystem or -idirafter).
+        bool is_system = clang_Location_isInSystemHeader(clang_getCursorLocation(c));
+        if (included_file != nullptr) {
+          CXSourceLocation included_location = clang_getLocationForOffset(
+              clang_Cursor_getTranslationUnit(c), included_file, 0);
+          is_system = is_system || clang_Location_isInSystemHeader(included_location);
         }
 
         if (!is_system && !header_spelling.empty()) {
